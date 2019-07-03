@@ -1,0 +1,96 @@
+---
+title: "Practical Machine Learning Week 4 Assignment"
+author: "Chris Wadsworth"
+date: "June 25, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(caret)
+library(randomForest)
+library(knitr)
+```
+
+## Overview
+
+The purpose of this analysis is to predict the manner in which participants conducted an exercise, known as **classe**.  This analysis uses the `caret` and `randomForest` packages to produce regression tree and random forest models.  
+
+The website included in the instructions indicated that the researchers were able to predict the classification of the exercise, **classe**, with over 99% reliability.  This suggests that an acceptable out of sample error rate will be around 1%.  
+
+This paper has the following sections.  In Data Exploration, I explain how I identified variables for inclusion in the model.  In Modeling, I demonstrate building both a Regression Tree model with the caret package and a Random Forest model with the randomForest package.  
+
+## Data Exploration
+The data is available in the web through two different sites, one for training data and one for testing data.  The training data set contains 19,622 observations of 160 variables, including **classe**.
+
+```{r read and select data}
+training <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv")
+testing <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv")
+
+str(training[,1:10])
+```
+
+As one can observe from the results of the `str` function above, there are a number of fields that can be safely ignored from the start.  First, the variable **X** appears to be the index.  Second, the **user_name** and various timestamps should not have any impact on the classification of the exercise.  Similarly, the window fields appear to contain administrative information (i.e., not sensor information).  One can varify that there is no discernable relationship between these first seven columns and **classe** in the pairwise plot below, with one exception.  It appears that **X** is highly correlated with **classe**, which maybe a result of the study design or data processing and thus not a good predictor of **classe** outside of the training set.
+
+```{r pairwise, echo=FALSE, fig.cap="Figure 1: Pairwise Plot of Administrative Variables and Classe", fig.align='center'}
+plot(training[,c(1:7,160)])
+```
+
+In addition to the administrative information which has potentially no predictive value, there are numerous variables that are missing information for most observations.  The summary of three of these variables is shown below.  Notice that each variable have 19,216 blank entries of the 19,622 observations.  
+```{r na variables}
+summary(training[,12:14])
+```
+
+## Data Preparation
+There are two potential ways of dealing with the missing data.  One could impute the data from the remaining variables.  However, since the vast majority of those columns is missing, this idea is rejected because there should be no useful information in those columns.  Therefore, it is better in this instance to ignore those variables for future analysis.
+
+Before building the model, the data needs to be prepared in three ways.  First, we need to ignore the first seven variables for the reasons stated above.  Second, we need to ignore those variables for which the vast majority of information is missing.  Lastly, we need to check the remaining variables for zero variance and ignore those that have zero variance, since those variables will have no predictive value.
+
+
+
+```{r preparing}
+ad.var <- 1:7 # Administrative variables
+
+na.zv.var <- c() # Variables with Missing Data and Zero Variance
+for (i in 8:(ncol(training)-1)) {
+  training[,i] <- ifelse(training[,i] %in% c("", "#DIV0/!"), NA, training[,i]) # Replace missing values with NA
+  if (sum(is.na(training[,i]))>19000) { # Identify variables where most data is missing
+    na.zv.var <- c(na.zv.var, i)
+  } else if (var(training[,i])==0) { # Identify variables with zero variance
+    na.zv.var <- c(na.zv.var, i)
+  }
+}
+
+ignore.var <- c(ad.var, na.zv.var)
+ncol(training)-length(ignore.var)-1 #the 1 represents classe
+```
+The result from *ignore.var* suggests that 52 of the variables may be useful for predicting **classe**.
+
+##Modeling
+###Regression Tree
+As stated above, I will attempt to build two models using regression trees and random forests using the `caret` and `randomForest` packages, respectively, starting with the regression tree.  These models were chosen because I am using numeric variables to classify, where the classification scheme contains more than two possibilities.  (A generalized linear regression model may work if I only needed to predict a binary outcome.) 
+
+The code below builds the regression tree model, predicts the **classe** variable, and provides the confusion matrix.  By default, the `train` function uses bootstrapping for cross validation.
+```{r modeling rpart}
+set.seed(67890)
+model.tree <- caret::train(classe ~ ., data=training[,-ignore.var], method="rpart")
+pred.tree <- predict(model.tree, training)
+cm <- caret::confusionMatrix(pred.tree, training$classe)
+kable(cm$table)
+```
+
+As one can infer from the confusion matrix, the accuracy of the predictions from the regression tree model are fairly poor.  Only `r sum(pred.tree==training$classe)` predictions were true of the `r nrow(training)` observations, or `r paste0(round(cm$overall[[1]]*100,2),"%")` accuracy.  This is somewhat better than random guessing (~20% accuracy), but significantly less than the goal of 99% accuracy.
+
+In the next code chunk, I build a random forest model using the `randomForest` function.  The resulting output, `model.rf`, contains the confusion matrix.
+```{r modeling rf}
+set.seed(12345)
+model.rf <- randomForest(classe ~ ., data=training[,-ignore.var])
+kable(model.rf$confusion)
+```
+
+As one can tell from the confusion matrix, this model has extremely high accuracy for the training set.  In fact, the random forest model correctly predicts `r sum(model.rf$predicted==training$classe)` observations, or roughly `r paste0(round(sum(model.rf$predicted==training$classe)*100/nrow(training),2),"%")` of the observations.  As a last note of caution, this level of accuracy could be an indication of overfitting and one should not expect this level of accuracy with the test set.  The out-of-sample error rate will be higher than `r paste0(round(100-sum(model.rf$predicted==training$classe)*100/nrow(training),2),"%")`.
+
+The result that the random forest model outperforms the regression tree model is understandable since random forests are a specialized case of regression trees with boosted aggregation, or bagging.
+
+## Conclusion
+Inspection of the data set was necessary to identify the variables that should have been included in the model.  Administrative information and most empty variables were ignored, while still allowing for high performance of the model.  Cross-validation was conducted using Furthermore, the random forest model outperformed the regression tree by a large margin due to the effects of boosted aggregation, or bagging.  The random forest model achieved less than 1% error with the training set.
